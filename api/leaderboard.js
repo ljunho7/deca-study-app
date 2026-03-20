@@ -1,34 +1,26 @@
-import { put } from '@vercel/blob'
-
-export const config = { runtime: 'edge' }
+import { put, list } from '@vercel/blob'
 
 const BLOB_KEY = 'shared/leaderboard.json'
 
 async function readLeaderboard() {
   try {
-    const listRes = await fetch(
-      `https://blob.vercel-storage.com?prefix=${BLOB_KEY}`,
-      { headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` } }
-    )
-    const listData = await listRes.json()
-    if (!listData.blobs || listData.blobs.length === 0) return []
-    const dataRes = await fetch(listData.blobs[0].url)
-    return dataRes.json()
+    const { blobs } = await list({ prefix: BLOB_KEY, token: process.env.BLOB_READ_WRITE_TOKEN })
+    if (!blobs || blobs.length === 0) return []
+    const res = await fetch(blobs[0].url)
+    return res.json()
   } catch {
     return []
   }
 }
 
-export default async function handler(req) {
+export default async function handler(req, res) {
   if (req.method === 'GET') {
     const lb = await readLeaderboard()
-    return new Response(JSON.stringify(lb), {
-      headers: { 'Content-Type': 'application/json' }
-    })
+    return res.status(200).json(lb)
   }
 
   if (req.method === 'POST') {
-    const { user, stats } = await req.json()
+    const { user, stats } = req.body
     const lb = await readLeaderboard()
     const idx = lb.findIndex(e => e.user === user)
     const entry = { user, ...stats, updatedAt: new Date().toISOString() }
@@ -40,10 +32,8 @@ export default async function handler(req) {
       token: process.env.BLOB_READ_WRITE_TOKEN,
       addRandomSuffix: false
     })
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { 'Content-Type': 'application/json' }
-    })
+    return res.status(200).json({ ok: true })
   }
 
-  return new Response('Method not allowed', { status: 405 })
+  res.status(405).json({ error: 'Method not allowed' })
 }

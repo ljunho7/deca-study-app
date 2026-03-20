@@ -1,59 +1,38 @@
-import { put, head, getDownloadUrl } from '@vercel/blob'
+import { put, list } from '@vercel/blob'
 
-export const config = { runtime: 'edge' }
-
-export default async function handler(req) {
-  const url = new URL(req.url)
-
+export default async function handler(req, res) {
   if (req.method === 'GET') {
-    const user = url.searchParams.get('user')
-    if (!user) return new Response('Missing user', { status: 400 })
+    const { user } = req.query
+    if (!user) return res.status(400).json({ error: 'Missing user' })
     try {
-      const key = `progress/${encodeURIComponent(user)}.json`
-      const blobUrl = `${process.env.BLOB_READ_WRITE_TOKEN ? '' : ''}` 
-      // Try to fetch existing blob
-      const listRes = await fetch(
-        `https://blob.vercel-storage.com?prefix=progress/${encodeURIComponent(user)}.json`,
-        { headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` } }
-      )
-      const listData = await listRes.json()
-      if (!listData.blobs || listData.blobs.length === 0) {
-        return new Response(JSON.stringify(getDefaultProgress()), {
-          headers: { 'Content-Type': 'application/json' }
-        })
-      }
-      const dataRes = await fetch(listData.blobs[0].url)
+      const { blobs } = await list({ prefix: `progress/${encodeURIComponent(user)}.json`, token: process.env.BLOB_READ_WRITE_TOKEN })
+      if (!blobs || blobs.length === 0) return res.status(200).json(defaultProgress())
+      const dataRes = await fetch(blobs[0].url)
       const data = await dataRes.json()
-      return new Response(JSON.stringify(data), {
-        headers: { 'Content-Type': 'application/json' }
-      })
+      return res.status(200).json(data)
     } catch {
-      return new Response(JSON.stringify(getDefaultProgress()), {
-        headers: { 'Content-Type': 'application/json' }
-      })
+      return res.status(200).json(defaultProgress())
     }
   }
 
   if (req.method === 'POST') {
-    const { user, data } = await req.json()
-    if (!user) return new Response('Missing user', { status: 400 })
-    const blob = await put(
+    const { user, data } = req.body
+    if (!user) return res.status(400).json({ error: 'Missing user' })
+    await put(
       `progress/${encodeURIComponent(user)}.json`,
       JSON.stringify(data),
       { access: 'public', token: process.env.BLOB_READ_WRITE_TOKEN, addRandomSuffix: false }
     )
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { 'Content-Type': 'application/json' }
-    })
+    return res.status(200).json({ ok: true })
   }
 
-  return new Response('Method not allowed', { status: 405 })
+  res.status(405).json({ error: 'Method not allowed' })
 }
 
-function getDefaultProgress() {
+function defaultProgress() {
   return {
-    flashcards: {},   // { cardId: { status: 'new'|'learning'|'known', nextReview: timestamp, reviews: 0 } }
-    exams: [],        // [{ date, score, category, total }]
+    flashcards: {},
+    exams: [],
     totalPoints: 0,
     lastActive: new Date().toISOString()
   }
