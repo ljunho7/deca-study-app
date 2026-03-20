@@ -1,11 +1,11 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { saveProgress, getProgress } from '../lib/storage.js'
 
 // Simple SM-2 spaced repetition
 function nextReview(card, quality) {
-  // quality: 0=forgot, 1=hard, 2=easy
   const now = Date.now()
   const reviews = (card.reviews || 0) + 1
-  let interval = card.interval || 1 // days
+  let interval = card.interval || 1
   let ease = card.ease || 2.5
 
   if (quality === 0) {
@@ -52,40 +52,122 @@ export default function Flashcards({ user, data }) {
   const [queue, setQueue] = useState([])
   const [currentIdx, setCurrentIdx] = useState(0)
   const [flipped, setFlipped] = useState(false)
-  const [mode, setMode] = useState('menu') // 'menu' | 'study' | 'done'
+  const [mode, setMode] = useState('menu')
   const [sessionStats, setSessionStats] = useState({ known: 0, learning: 0, total: 0 })
+  const [syncStatus, setSyncStatus] = useState('saved') // 'saved' | 'saving' | 'unsaved'
+  const pendingProgressRef = useRef(null) // holds latest progress waiting to be synced
+  const syncTimerRef = useRef(null)
 
   const PROG_KEY = `deca_progress_${user.key}`
 
+  // ── Load progress on mount ──────────────────────────────────────────
   useEffect(() => {
     if (!data) return
     setCards(data)
+
+    // 1. Load from localStorage immediately (instant, no network wait)
     try {
       const stored = JSON.parse(localStorage.getItem(PROG_KEY) || '{}')
       setProgress(stored.flashcards || {})
     } catch {}
+
+    // 2. Then sync from server in background (picks up other devices)
+    getProgress(user.key).then(serverData => {
+      if (serverData?.flashcards) {
+        setProgress(serverData.flashcards)
+        // Merge into localStorage too
+        try {
+          const stored = JSON.parse(localStorage.getItem(PROG_KEY) || '{}')
+          stored.flashcards = serverData.flashcards
+          localStorage.setItem(PROG_KEY, JSON.stringify(stored))
+        } catch {}
+      }
+    }).catch(() => {}) // silently ignore network errors
   }, [data])
 
-  const saveProgress = useCallback((newProg) => {
-    setProgress(newProg)
+  // ── Auto-save every 30 seconds if there are pending changes ─────────
+  useEffect(() => {
+    syncTimerRef.current = setInterval(() => {
+      if (pendingProgressRef.current) {
+        pushToServer(pendingProgressRef.current)
+        pendingProgressRef.current = null
+      }
+    }, 30000)
+    return () => clearInterval(syncTimerRef.current)
+  }, [user.key])
+
+  // ── Save on tab/window close or app background ───────────────────────
+  useEffect(() => {
+    const flush = () => {
+      if (pendingProgressRef.current) {
+        // Use sendBeacon for reliability during page unload
+        const payload = JSON.stringify({ user: user.key, data: buildFullProgress(pendingProgressRef.current) })
+        navigator.sendBeacon?.('/api/progress', new Blob([payload], { type: 'application/json' }))
+        pendingProgressRef.current = null
+      }
+    }
+    window.addEventListener('beforeunload', flush)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') flush()
+    })
+    return () => {
+      window.removeEventListener('beforeunload', flush)
+      flush() // also flush when component unmounts (tab switch)
+    }
+  }, [user.key])
+
+  function buildFullProgress(flashcards) {
     try {
       const stored = JSON.parse(localStorage.getItem(PROG_KEY) || '{}')
-      stored.flashcards = newProg
+      return { ...stored, flashcards }
+    } catch {
+      return { flashcards }
+    }
+  }
+
+  async function pushToServer(flashcards) {
+    setSyncStatus('saving')
+    try {
+      const fullProgress = buildFullProgress(flashcards)
+      await saveProgress(user.key, fullProgress)
+      setSyncStatus('saved')
+    } catch {
+      setSyncStatus('unsaved')
+    }
+  }
+
+  // ── Called on every card answer ──────────────────────────────────────
+  const persistProgress = useCallback((newFlashcards) => {
+    // 1. Always save to localStorage immediately (zero-latency)
+    try {
+      const stored = JSON.parse(localStorage.getItem(PROG_KEY) || '{}')
+      stored.flashcards = newFlashcards
       localStorage.setItem(PROG_KEY, JSON.stringify(stored))
     } catch {}
-  }, [PROG_KEY])
+
+    // 2. Mark as having unsaved server changes
+    pendingProgressRef.current = newFlashcards
+    setSyncStatus('unsaved')
+
+    // 3. Debounce server push: wait 3 seconds after last card flip before syncing
+    clearTimeout(syncTimerRef._debounce)
+    syncTimerRef._debounce = setTimeout(() => {
+      if (pendingProgressRef.current) {
+        pushToServer(pendingProgressRef.current)
+        pendingProgressRef.current = null
+      }
+    }, 3000)
+  }, [PROG_KEY, user.key])
 
   function buildQueue(ch) {
     const filtered = ch === 'All chapters' ? cards : cards.filter(c => c.chapter === ch)
     const now = Date.now()
-    // Priority: due cards first, then new cards
     const due = filtered.filter(c => {
       const p = progress[c.id]
       return p && p.status !== 'known' && (p.nextReview || 0) <= now
     })
     const newCards = filtered.filter(c => !progress[c.id])
-    const combined = [...due, ...newCards].slice(0, 50) // max 50 per session
-    // shuffle
+    const combined = [...due, ...newCards].slice(0, 50)
     for (let i = combined.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [combined[i], combined[j]] = [combined[j], combined[i]]
@@ -107,7 +189,8 @@ export default function Flashcards({ user, data }) {
     const existing = progress[card.id] || {}
     const updated = nextReview(existing, quality)
     const newProg = { ...progress, [card.id]: updated }
-    saveProgress(newProg)
+    setProgress(newProg)
+    persistProgress(newProg) // ← saves locally + queues server sync
 
     setSessionStats(s => ({
       ...s,
@@ -125,6 +208,9 @@ export default function Flashcards({ user, data }) {
 
   const totalKnown = Object.values(progress).filter(c => c.status === 'known').length
   const totalCards = chapter === 'All chapters' ? cards.length : cards.filter(c => c.chapter === chapter).length
+
+  const syncDot = syncStatus === 'saved' ? '#34C759' : syncStatus === 'saving' ? '#FF9500' : '#FF3B30'
+  const syncLabel = syncStatus === 'saved' ? 'Saved' : syncStatus === 'saving' ? 'Saving…' : 'Pending'
 
   const S = {
     screen: { padding: '0 0 16px', background: '#f5f5f7', minHeight: '100%' },
@@ -151,15 +237,21 @@ export default function Flashcards({ user, data }) {
     return (
       <div style={S.screen}>
         <div style={S.header}>
-          <div style={S.title}>Flashcards</div>
-          <div style={S.sub}>{totalKnown} of {cards.length} terms known overall</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <div style={S.title}>Flashcards</div>
+              <div style={S.sub}>{totalKnown} of {cards.length} terms known overall</div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#888' }}>
+              <div style={{ width: 7, height: 7, borderRadius: '50%', background: syncDot }} />
+              {syncLabel}
+            </div>
+          </div>
         </div>
         <div style={S.section}>
           <div style={{ fontSize: 13, fontWeight: 600, color: '#888', marginBottom: 8 }}>SELECT CHAPTER</div>
           <select style={S.select} value={chapter} onChange={e => setChapter(e.target.value)}>
-            {CHAPTERS.map(ch => (
-              <option key={ch} value={ch}>{ch}</option>
-            ))}
+            {CHAPTERS.map(ch => <option key={ch} value={ch}>{ch}</option>)}
           </select>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 16 }}>
             {[
@@ -177,7 +269,6 @@ export default function Flashcards({ user, data }) {
             {dueCount > 0 ? `Study ${dueCount} due cards →` : 'Study new cards →'}
           </button>
         </div>
-        {/* Chapter breakdown */}
         <div style={S.section}>
           <div style={{ fontSize: 13, fontWeight: 600, color: '#888', marginBottom: 12 }}>ALL CHAPTERS</div>
           {CHAPTERS.slice(1).map(ch => {
@@ -185,7 +276,7 @@ export default function Flashcards({ user, data }) {
             const known = cards.filter(c => c.chapter === ch && progress[c.id]?.status === 'known').length
             const pct = total > 0 ? Math.round(known / total * 100) : 0
             return (
-              <div key={ch} style={{ marginBottom: 12, cursor: 'pointer' }} onClick={() => { setChapter(ch); }}>
+              <div key={ch} style={{ marginBottom: 12, cursor: 'pointer' }} onClick={() => setChapter(ch)}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                   <span style={{ fontSize: 13 }}>{ch}</span>
                   <span style={{ fontSize: 12, color: '#888' }}>{known}/{total}</span>
@@ -212,6 +303,10 @@ export default function Flashcards({ user, data }) {
             : `You reviewed ${sessionStats.total} cards. ${sessionStats.known} known, ${sessionStats.learning} still learning.`}
         </div>
         <div style={{ width: '100%', padding: '0 32px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 13, color: '#888', marginBottom: 20 }}>
+            <div style={{ width: 7, height: 7, borderRadius: '50%', background: syncDot }} />
+            Progress {syncLabel.toLowerCase()}
+          </div>
           <button style={S.btn()} onClick={() => setMode('menu')}>← Back to chapters</button>
           {sessionStats.total > 0 && (
             <button style={{ ...S.btn('#34C759'), marginTop: 10 }} onClick={startSession}>Study again</button>
@@ -221,7 +316,6 @@ export default function Flashcards({ user, data }) {
     )
   }
 
-  // Study mode
   const card = queue[currentIdx]
   if (!card) return null
   const pct = Math.round(currentIdx / queue.length * 100)
@@ -234,11 +328,13 @@ export default function Flashcards({ user, data }) {
             ← Back
           </button>
           <span style={{ fontSize: 13, color: '#888' }}>{currentIdx + 1} / {queue.length}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#888' }}>
+            <div style={{ width: 7, height: 7, borderRadius: '50%', background: syncDot }} />
+            {syncLabel}
+          </div>
         </div>
       </div>
-
       <div style={S.progress}><div style={S.progressFill(pct)} /></div>
-
       <div style={S.card} onClick={() => setFlipped(f => !f)}>
         {!flipped ? (
           <>
@@ -256,7 +352,6 @@ export default function Flashcards({ user, data }) {
           </>
         )}
       </div>
-
       {flipped && (
         <div style={S.responseRow}>
           <button style={S.respBtn('#FF3B30')} onClick={() => handleResponse(0)}>Forgot</button>
