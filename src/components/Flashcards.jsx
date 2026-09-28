@@ -1,171 +1,106 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { saveProgress, getProgress } from '../lib/storage.js'
 
-// Simple SM-2 spaced repetition
 function nextReview(card, quality) {
   const now = Date.now()
-  const reviews = (card.reviews || 0) + 1
   let interval = card.interval || 1
   let ease = card.ease || 2.5
-
-  if (quality === 0) {
-    interval = 1
-    ease = Math.max(1.3, ease - 0.2)
-  } else if (quality === 1) {
-    interval = Math.max(1, Math.round(interval * 1.2))
-  } else {
-    interval = Math.round(interval * ease)
-    ease = Math.min(3.0, ease + 0.1)
-  }
-
+  if (quality === 0) { interval = 1; ease = Math.max(1.3, ease - 0.2) }
+  else if (quality === 1) { interval = Math.max(1, Math.round(interval * 1.2)) }
+  else { interval = Math.round(interval * ease); ease = Math.min(3.0, ease + 0.1) }
   return {
-    status: quality === 0 ? 'learning' : quality === 1 ? 'learning' : 'known',
-    nextReview: now + interval * 24 * 60 * 60 * 1000,
-    interval,
-    ease,
-    reviews,
+    status: quality < 2 ? 'learning' : 'known',
+    nextReview: now + interval * 86400000,
+    interval, ease,
+    reviews: (card.reviews || 0) + 1,
   }
 }
 
 const CHAPTERS = [
-  'All chapters',
-  'Financial Analysis',
-  'Financial-Information Management',
-  'Risk Management',
-  'Professional Development',
-  'Emotional Intelligence',
-  'Communications',
-  'Economics',
-  'Business Law',
-  'Information Management',
-  'Operations',
-  'Customer Relations',
-  'Human Resources Management',
-  'Marketing & Strategy',
-  'PI & 2025 Updates',
+  'All chapters', 'Financial Analysis', 'Financial-Information Management',
+  'Risk Management', 'Professional Development', 'Emotional Intelligence',
+  'Communications', 'Economics', 'Business Law', 'Information Management',
+  'Operations', 'Customer Relations', 'Human Resources Management',
+  'Marketing & Strategy', 'PI & 2025 Updates',
 ]
 
 export default function Flashcards({ user, data }) {
-  const [cards, setCards] = useState([])
-  const [progress, setProgress] = useState({})
-  const [chapter, setChapter] = useState('All chapters')
-  const [queue, setQueue] = useState([])
-  const [currentIdx, setCurrentIdx] = useState(0)
-  const [flipped, setFlipped] = useState(false)
-  const [mode, setMode] = useState('menu')
-  const [sessionStats, setSessionStats] = useState({ known: 0, learning: 0, total: 0 })
-  const [syncStatus, setSyncStatus] = useState('saved') // 'saved' | 'saving' | 'unsaved'
-  const pendingProgressRef = useRef(null) // holds latest progress waiting to be synced
-  const syncTimerRef = useRef(null)
+  const [cards, setCards]         = useState([])
+  const [progress, setProgress]   = useState({})
+  const [chapter, setChapter]     = useState('All chapters')
+  const [queue, setQueue]         = useState([])
+  const [idx, setIdx]             = useState(0)
+  const [flipped, setFlipped]     = useState(false)
+  const [mode, setMode]           = useState('menu')
+  const [session, setSession]     = useState({ known: 0, total: 0 })
+  const [sync, setSync]           = useState('saved')
+  const pendingRef                = useRef(null)
+  const PROG_KEY                  = `deca_progress_${user.key}`
 
-  const PROG_KEY = `deca_progress_${user.key}`
-
-  // ── Load progress on mount ──────────────────────────────────────────
   useEffect(() => {
     if (!data) return
     setCards(data)
-
-    // 1. Load from localStorage immediately (instant, no network wait)
     try {
       const stored = JSON.parse(localStorage.getItem(PROG_KEY) || '{}')
       setProgress(stored.flashcards || {})
     } catch {}
-
-    // 2. Then sync from server in background (picks up other devices)
-    getProgress(user.key).then(serverData => {
-      if (serverData?.flashcards) {
-        setProgress(serverData.flashcards)
-        // Merge into localStorage too
+    getProgress(user.key).then(s => {
+      if (s?.flashcards) {
+        setProgress(s.flashcards)
         try {
           const stored = JSON.parse(localStorage.getItem(PROG_KEY) || '{}')
-          stored.flashcards = serverData.flashcards
+          stored.flashcards = s.flashcards
           localStorage.setItem(PROG_KEY, JSON.stringify(stored))
         } catch {}
       }
-    }).catch(() => {}) // silently ignore network errors
+    }).catch(() => {})
   }, [data])
 
-  // ── Auto-save every 30 seconds if there are pending changes ─────────
   useEffect(() => {
-    syncTimerRef.current = setInterval(() => {
-      if (pendingProgressRef.current) {
-        pushToServer(pendingProgressRef.current)
-        pendingProgressRef.current = null
-      }
+    const timer = setInterval(() => {
+      if (pendingRef.current) { push(pendingRef.current); pendingRef.current = null }
     }, 30000)
-    return () => clearInterval(syncTimerRef.current)
-  }, [user.key])
-
-  // ── Save on tab/window close or app background ───────────────────────
-  useEffect(() => {
     const flush = () => {
-      if (pendingProgressRef.current) {
-        // Use sendBeacon for reliability during page unload
-        const payload = JSON.stringify({ user: user.key, data: buildFullProgress(pendingProgressRef.current) })
-        navigator.sendBeacon?.('/api/progress', new Blob([payload], { type: 'application/json' }))
-        pendingProgressRef.current = null
+      if (pendingRef.current) {
+        const p = JSON.stringify({ user: user.key, data: buildFull(pendingRef.current) })
+        navigator.sendBeacon?.('/api/progress', new Blob([p], { type: 'application/json' }))
+        pendingRef.current = null
       }
     }
     window.addEventListener('beforeunload', flush)
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') flush()
-    })
-    return () => {
-      window.removeEventListener('beforeunload', flush)
-      flush() // also flush when component unmounts (tab switch)
-    }
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush() })
+    return () => { clearInterval(timer); window.removeEventListener('beforeunload', flush) }
   }, [user.key])
 
-  function buildFullProgress(flashcards) {
-    try {
-      const stored = JSON.parse(localStorage.getItem(PROG_KEY) || '{}')
-      return { ...stored, flashcards }
-    } catch {
-      return { flashcards }
-    }
+  function buildFull(fc) {
+    try { const s = JSON.parse(localStorage.getItem(PROG_KEY) || '{}'); return { ...s, flashcards: fc } }
+    catch { return { flashcards: fc } }
   }
 
-  async function pushToServer(flashcards) {
-    setSyncStatus('saving')
-    try {
-      const fullProgress = buildFullProgress(flashcards)
-      await saveProgress(user.key, fullProgress)
-      setSyncStatus('saved')
-    } catch {
-      setSyncStatus('unsaved')
-    }
+  async function push(fc) {
+    setSync('saving')
+    try { await saveProgress(user.key, buildFull(fc)); setSync('saved') }
+    catch { setSync('unsaved') }
   }
 
-  // ── Called on every card answer ──────────────────────────────────────
-  const persistProgress = useCallback((newFlashcards) => {
-    // 1. Always save to localStorage immediately (zero-latency)
+  const persist = useCallback((newProg) => {
     try {
-      const stored = JSON.parse(localStorage.getItem(PROG_KEY) || '{}')
-      stored.flashcards = newFlashcards
-      localStorage.setItem(PROG_KEY, JSON.stringify(stored))
+      const s = JSON.parse(localStorage.getItem(PROG_KEY) || '{}')
+      s.flashcards = newProg
+      localStorage.setItem(PROG_KEY, JSON.stringify(s))
     } catch {}
-
-    // 2. Mark as having unsaved server changes
-    pendingProgressRef.current = newFlashcards
-    setSyncStatus('unsaved')
-
-    // 3. Debounce server push: wait 3 seconds after last card flip before syncing
-    clearTimeout(syncTimerRef._debounce)
-    syncTimerRef._debounce = setTimeout(() => {
-      if (pendingProgressRef.current) {
-        pushToServer(pendingProgressRef.current)
-        pendingProgressRef.current = null
-      }
+    pendingRef.current = newProg
+    setSync('unsaved')
+    clearTimeout(pendingRef._t)
+    pendingRef._t = setTimeout(() => {
+      if (pendingRef.current) { push(pendingRef.current); pendingRef.current = null }
     }, 3000)
-  }, [PROG_KEY, user.key])
+  }, [PROG_KEY])
 
   function buildQueue(ch) {
     const filtered = ch === 'All chapters' ? cards : cards.filter(c => c.chapter === ch)
     const now = Date.now()
-    const due = filtered.filter(c => {
-      const p = progress[c.id]
-      return p && p.status !== 'known' && (p.nextReview || 0) <= now
-    })
+    const due = filtered.filter(c => progress[c.id] && progress[c.id].status !== 'known' && (progress[c.id].nextReview || 0) <= now)
     const newCards = filtered.filter(c => !progress[c.id])
     const combined = [...due, ...newCards].slice(0, 50)
     for (let i = combined.length - 1; i > 0; i--) {
@@ -175,190 +110,217 @@ export default function Flashcards({ user, data }) {
     return combined
   }
 
-  function startSession() {
+  function start() {
     const q = buildQueue(chapter)
-    setQueue(q)
-    setCurrentIdx(0)
-    setFlipped(false)
-    setSessionStats({ known: 0, learning: 0, total: q.length })
+    setQueue(q); setIdx(0); setFlipped(false)
+    setSession({ known: 0, total: q.length })
     setMode(q.length === 0 ? 'done' : 'study')
   }
 
-  function handleResponse(quality) {
-    const card = queue[currentIdx]
-    const existing = progress[card.id] || {}
-    const updated = nextReview(existing, quality)
-    const newProg = { ...progress, [card.id]: updated }
+  function respond(quality) {
+    const card = queue[idx]
+    const newProg = { ...progress, [card.id]: nextReview(progress[card.id] || {}, quality) }
     setProgress(newProg)
-    persistProgress(newProg) // ← saves locally + queues server sync
-
-    setSessionStats(s => ({
-      ...s,
-      known: s.known + (quality === 2 ? 1 : 0),
-      learning: s.learning + (quality < 2 ? 1 : 0),
-    }))
-
-    if (currentIdx + 1 >= queue.length) {
-      setMode('done')
-    } else {
-      setCurrentIdx(i => i + 1)
-      setFlipped(false)
-    }
+    persist(newProg)
+    setSession(s => ({ ...s, known: s.known + (quality === 2 ? 1 : 0) }))
+    if (idx + 1 >= queue.length) setMode('done')
+    else { setIdx(i => i + 1); setFlipped(false) }
   }
 
   const totalKnown = Object.values(progress).filter(c => c.status === 'known').length
-  const totalCards = chapter === 'All chapters' ? cards.length : cards.filter(c => c.chapter === chapter).length
+  const chTotal    = chapter === 'All chapters' ? cards.length : cards.filter(c => c.chapter === chapter).length
+  const dueCount   = buildQueue(chapter).length
+  const pct        = queue.length ? Math.round(idx / queue.length * 100) : 0
 
-  const syncDot = syncStatus === 'saved' ? '#34C759' : syncStatus === 'saving' ? '#FF9500' : '#FF3B30'
-  const syncLabel = syncStatus === 'saved' ? 'Saved' : syncStatus === 'saving' ? 'Saving…' : 'Pending'
+  const syncColor = sync === 'saved' ? 'bg-secondary' : sync === 'saving' ? 'bg-amber-500' : 'bg-error'
+  const syncLabel = sync === 'saved' ? 'Saved' : sync === 'saving' ? 'Saving…' : 'Pending'
 
-  const S = {
-    screen: { padding: '0 0 16px', background: '#f5f5f7', minHeight: '100%' },
-    header: { background: '#fff', padding: '16px 20px', marginBottom: 16, borderBottom: '0.5px solid #e5e5e5' },
-    title: { fontSize: 20, fontWeight: 700 },
-    sub: { fontSize: 13, color: '#888', marginTop: 2 },
-    section: { background: '#fff', borderRadius: 14, margin: '0 16px 16px', padding: 16 },
-    select: { width: '100%', padding: '12px 14px', fontSize: 15, border: '1px solid #e0e0e0', borderRadius: 10, background: '#f9f9f9', marginBottom: 16, outline: 'none' },
-    btn: (bg='#007AFF') => ({ width: '100%', padding: '15px', fontSize: 16, fontWeight: 600, background: bg, color: '#fff', border: 'none', borderRadius: 12, cursor: 'pointer', marginTop: 8 }),
-    card: { background: '#fff', borderRadius: 16, margin: '0 16px 16px', padding: '32px 20px', minHeight: 220, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', boxShadow: '0 2px 12px rgba(0,0,0,0.08)', cursor: 'pointer', textAlign: 'center' },
-    termLabel: { fontSize: 11, fontWeight: 600, color: '#888', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 16 },
-    term: { fontSize: 22, fontWeight: 700, color: '#1d1d1f', marginBottom: 8, lineHeight: 1.3 },
-    chapter: { fontSize: 12, color: '#007AFF', fontWeight: 500 },
-    definition: { fontSize: 15, color: '#333', lineHeight: 1.6, textAlign: 'left' },
-    tapHint: { fontSize: 13, color: '#aaa', marginTop: 16 },
-    responseRow: { display: 'flex', gap: 10, margin: '0 16px' },
-    respBtn: (bg) => ({ flex: 1, padding: '13px 0', background: bg, color: '#fff', border: 'none', borderRadius: 12, cursor: 'pointer', fontSize: 14, fontWeight: 600 }),
-    progress: { height: 4, background: '#e5e5e5', margin: '0 16px 16px', borderRadius: 4, overflow: 'hidden' },
-    progressFill: (pct) => ({ height: '100%', width: `${pct}%`, background: '#007AFF', borderRadius: 4, transition: 'width 0.3s' }),
-  }
+  if (mode === 'done') return (
+    <div className="min-h-screen bg-background flex flex-col items-center justify-center px-8 text-center">
+      <div className="text-6xl mb-5">🎉</div>
+      <h2 className="text-2xl font-black text-on-surface mb-2">Session complete!</h2>
+      <p className="text-on-surface-variant text-sm mb-8 max-w-xs">
+        {session.total === 0
+          ? "You're all caught up! Come back tomorrow for more due cards."
+          : `Reviewed ${session.total} cards — ${session.known} known.`}
+      </p>
+      <div className="flex items-center gap-2 text-sm text-on-surface-variant mb-6">
+        <span className={`w-2 h-2 rounded-full ${syncColor}`} />
+        Progress {syncLabel.toLowerCase()}
+      </div>
+      <button onClick={() => setMode('menu')}
+        className="w-full bg-primary text-on-primary font-bold py-4 rounded-xl active:scale-95 transition-all">
+        ← Back to chapters
+      </button>
+    </div>
+  )
 
-  if (mode === 'menu') {
-    const dueCount = buildQueue(chapter).length
+  if (mode === 'study') {
+    const card = queue[idx]
+    if (!card) return null
     return (
-      <div style={S.screen}>
-        <div style={S.header}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <div style={S.title}>Flashcards</div>
-              <div style={S.sub}>{totalKnown} of {cards.length} terms known overall</div>
+      <div className="min-h-screen bg-surface-container-low flex flex-col">
+        {/* Header */}
+        <div className="bg-background px-5 pt-12 pb-3 flex items-center justify-between">
+          <button onClick={() => setMode('menu')}
+            className="flex items-center gap-1.5 text-primary font-bold text-sm active:opacity-70">
+            <span className="material-symbols-outlined text-[20px]">arrow_back</span>
+            Back
+          </button>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5 px-3 py-1 bg-secondary-container/20 rounded-full">
+              <span className={`w-2 h-2 rounded-full ${syncColor}`} />
+              <span className="text-[11px] font-bold text-on-secondary-container uppercase tracking-wide">{syncLabel}</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#888' }}>
-              <div style={{ width: 7, height: 7, borderRadius: '50%', background: syncDot }} />
-              {syncLabel}
-            </div>
+            <span className="text-sm font-bold text-on-surface-variant">{idx + 1} / {queue.length}</span>
           </div>
         </div>
-        <div style={S.section}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#888', marginBottom: 8 }}>SELECT CHAPTER</div>
-          <select style={S.select} value={chapter} onChange={e => setChapter(e.target.value)}>
-            {CHAPTERS.map(ch => <option key={ch} value={ch}>{ch}</option>)}
-          </select>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 16 }}>
-            {[
-              { label: 'Total', val: totalCards, color: '#1d1d1f' },
-              { label: 'Due now', val: dueCount, color: '#FF9500' },
-              { label: 'Known', val: Object.values(progress).filter(c => c.status === 'known').length, color: '#34C759' },
-            ].map(({ label, val, color }) => (
-              <div key={label} style={{ background: '#f5f5f7', borderRadius: 10, padding: '10px 12px', textAlign: 'center' }}>
-                <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>{label}</div>
-                <div style={{ fontSize: 20, fontWeight: 700, color }}>{val}</div>
-              </div>
-            ))}
-          </div>
-          <button style={S.btn()} onClick={startSession}>
-            {dueCount > 0 ? `Study ${dueCount} due cards →` : 'Study new cards →'}
+        <div className="text-sm text-on-surface-variant px-5 pb-2 bg-background">
+          Chapter · {card.chapter}
+        </div>
+
+        {/* Progress bar */}
+        <div className="h-1 w-full bg-surface-container">
+          <div className="h-full bg-primary transition-all duration-500" style={{ width: `${pct}%` }} />
+        </div>
+
+        {/* Chapter selector pill */}
+        <div className="px-5 pt-5 pb-2">
+          <button className="flex items-center gap-2 px-4 py-2 bg-surface-container-lowest rounded-full shadow-sm border border-outline-variant/15 active:scale-95 transition-all">
+            <span className="text-xs font-bold text-primary tracking-wider uppercase">{card.chapter.split(' ')[0]}</span>
+            <span className="material-symbols-outlined text-[16px] text-primary">expand_more</span>
           </button>
         </div>
-        <div style={S.section}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#888', marginBottom: 12 }}>ALL CHAPTERS</div>
-          {CHAPTERS.slice(1).map(ch => {
-            const total = cards.filter(c => c.chapter === ch).length
-            const known = cards.filter(c => c.chapter === ch && progress[c.id]?.status === 'known').length
-            const pct = total > 0 ? Math.round(known / total * 100) : 0
-            return (
-              <div key={ch} style={{ marginBottom: 12, cursor: 'pointer' }} onClick={() => setChapter(ch)}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <span style={{ fontSize: 13 }}>{ch}</span>
-                  <span style={{ fontSize: 12, color: '#888' }}>{known}/{total}</span>
-                </div>
-                <div style={{ height: 5, background: '#e5e5e5', borderRadius: 3, overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${pct}%`, background: pct > 70 ? '#34C759' : pct > 40 ? '#FF9500' : '#FF3B30', borderRadius: 3 }} />
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-    )
-  }
 
-  if (mode === 'done') {
-    return (
-      <div style={{ ...S.screen, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100dvh' }}>
-        <div style={{ fontSize: 60, marginBottom: 16 }}>🎉</div>
-        <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>Session complete!</div>
-        <div style={{ fontSize: 15, color: '#666', marginBottom: 32, textAlign: 'center', padding: '0 32px' }}>
-          {sessionStats.total === 0
-            ? "You're all caught up! Come back tomorrow for more due cards."
-            : `You reviewed ${sessionStats.total} cards. ${sessionStats.known} known, ${sessionStats.learning} still learning.`}
+        {/* Card */}
+        <div className="px-5 flex-1">
+          <button onClick={() => setFlipped(f => !f)}
+            className="w-full rounded-3xl bg-surface-container-lowest shadow-[0px_20px_40px_rgba(26,27,33,0.06)] p-8 flex flex-col items-center justify-between text-center relative overflow-hidden min-h-[320px]">
+            {/* Top accent bar */}
+            <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-primary via-primary-container to-secondary opacity-80" />
+            {!flipped ? (
+              <>
+                <div className="space-y-1.5 mt-2">
+                  <span className="text-[11px] font-extrabold text-on-surface-variant tracking-[0.15em] uppercase">TERM</span>
+                  <div className="w-8 h-0.5 bg-outline-variant/30 mx-auto rounded-full" />
+                </div>
+                <div className="space-y-3 py-4">
+                  <h1 className="text-3xl font-extrabold text-primary tracking-tighter leading-tight">{card.term}</h1>
+                  <div className="inline-flex items-center px-3 py-1 bg-primary-fixed rounded-lg">
+                    <span className="text-[10px] font-bold text-primary tracking-wide uppercase">{card.chapter}</span>
+                  </div>
+                  {card.type === 'pi' && <div className="text-[10px] font-bold bg-amber-50 text-amber-800 px-3 py-1 rounded-full">★ PI topic</div>}
+                  {card.type === 'trend' && <div className="text-[10px] font-bold bg-emerald-50 text-emerald-800 px-3 py-1 rounded-full">🌐 2025/26 trend</div>}
+                  {card.type === 'exam2026' && <div className="text-[10px] font-bold bg-yellow-50 text-yellow-800 px-3 py-1 rounded-full">★ New from 2026 exams</div>}
+                </div>
+                <p className="text-sm italic text-on-surface-variant/70 font-medium">Tap to reveal definition</p>
+              </>
+            ) : (
+              <>
+                <span className="text-[11px] font-extrabold text-on-surface-variant tracking-[0.15em] uppercase mt-2">{card.term}</span>
+                <p className="text-[15px] text-on-surface leading-relaxed text-left flex-1 mt-4">{card.definition}</p>
+              </>
+            )}
+          </button>
         </div>
-        <div style={{ width: '100%', padding: '0 32px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 13, color: '#888', marginBottom: 20 }}>
-            <div style={{ width: 7, height: 7, borderRadius: '50%', background: syncDot }} />
-            Progress {syncLabel.toLowerCase()}
+
+        {/* Stats row */}
+        <div className="grid grid-cols-3 gap-3 px-5 mt-4">
+          {[
+            { label: 'Known',  val: Object.values(progress).filter(c=>c.status==='known').length, color: 'text-secondary' },
+            { label: 'Review', val: Object.values(progress).filter(c=>c.status==='learning').length, color: 'text-tertiary-container' },
+            { label: 'New',    val: cards.length - Object.keys(progress).length, color: 'text-on-surface-variant' },
+          ].map(({ label, val, color }) => (
+            <div key={label} className="bg-surface-container-low rounded-xl p-3 text-center">
+              <p className={`text-[10px] font-bold uppercase tracking-widest ${color} mb-1`}>{label}</p>
+              <p className="text-lg font-extrabold text-on-surface">{val}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Response buttons */}
+        {flipped && (
+          <div className="grid grid-cols-3 gap-3 px-5 mt-3 pb-4">
+            <button onClick={() => respond(0)} className="py-4 bg-error-container text-on-error-container rounded-2xl font-bold text-sm active:scale-95 transition-all">Forgot</button>
+            <button onClick={() => respond(1)} className="py-4 bg-tertiary-fixed text-on-tertiary-fixed-variant rounded-2xl font-bold text-sm active:scale-95 transition-all">Hard</button>
+            <button onClick={() => respond(2)} className="py-4 bg-secondary text-on-secondary rounded-2xl font-bold text-sm shadow-lg shadow-secondary/20 active:scale-95 transition-all">Got it ✓</button>
           </div>
-          <button style={S.btn()} onClick={() => setMode('menu')}>← Back to chapters</button>
-          {sessionStats.total > 0 && (
-            <button style={{ ...S.btn('#34C759'), marginTop: 10 }} onClick={startSession}>Study again</button>
-          )}
-        </div>
+        )}
+        {!flipped && <div className="pb-4" />}
       </div>
     )
   }
 
-  const card = queue[currentIdx]
-  if (!card) return null
-  const pct = Math.round(currentIdx / queue.length * 100)
-
+  // Menu mode
   return (
-    <div style={S.screen}>
-      <div style={S.header}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <button onClick={() => setMode('menu')} style={{ background: 'none', border: 'none', color: '#007AFF', fontSize: 15, cursor: 'pointer' }}>
-            ← Back
-          </button>
-          <span style={{ fontSize: 13, color: '#888' }}>{currentIdx + 1} / {queue.length}</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#888' }}>
-            <div style={{ width: 7, height: 7, borderRadius: '50%', background: syncDot }} />
+    <div className="bg-surface-container-low min-h-full pb-4">
+      {/* Header */}
+      <div className="bg-background px-5 pt-12 pb-5">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-black text-on-surface tracking-tight">Flashcards</h1>
+            <p className="text-sm text-on-surface-variant mt-0.5">{totalKnown} of {cards.length} terms known</p>
+          </div>
+          <div className="flex items-center gap-1.5 text-sm text-on-surface-variant">
+            <span className={`w-2 h-2 rounded-full ${syncColor}`} />
             {syncLabel}
           </div>
         </div>
       </div>
-      <div style={S.progress}><div style={S.progressFill(pct)} /></div>
-      <div style={S.card} onClick={() => setFlipped(f => !f)}>
-        {!flipped ? (
-          <>
-            <div style={S.termLabel}>Term</div>
-            <div style={S.term}>{card.term}</div>
-            <div style={S.chapter}>{card.chapter}</div>
-            {card.type === 'pi' && <div style={{ marginTop: 8, fontSize: 11, background: '#FFF8E1', color: '#7B4800', padding: '3px 10px', borderRadius: 20 }}>★ PI topic</div>}
-            {card.type === 'trend' && <div style={{ marginTop: 8, fontSize: 11, background: '#E8F5E9', color: '#1B5E20', padding: '3px 10px', borderRadius: 20 }}>🌐 2025/26 trend</div>}
-            <div style={S.tapHint}>Tap to reveal definition</div>
-          </>
-        ) : (
-          <>
-            <div style={S.termLabel}>{card.term}</div>
-            <div style={S.definition}>{card.definition}</div>
-          </>
-        )}
-      </div>
-      {flipped && (
-        <div style={S.responseRow}>
-          <button style={S.respBtn('#FF3B30')} onClick={() => handleResponse(0)}>Forgot</button>
-          <button style={S.respBtn('#FF9500')} onClick={() => handleResponse(1)}>Hard</button>
-          <button style={S.respBtn('#34C759')} onClick={() => handleResponse(2)}>Got it ✓</button>
+
+      {/* Chapter selector */}
+      <div className="px-5 mt-3">
+        <div className="bg-surface-container-lowest rounded-2xl p-4 shadow-[0px_2px_8px_rgba(26,27,33,0.04)]">
+          <p className="text-[11px] font-black uppercase tracking-[0.12em] text-on-surface-variant mb-3">Select chapter</p>
+          <select value={chapter} onChange={e => setChapter(e.target.value)}
+            className="w-full bg-surface-container-low rounded-xl px-4 py-3 text-on-surface font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 border-0 mb-4">
+            {CHAPTERS.map(ch => <option key={ch}>{ch}</option>)}
+          </select>
+          <div className="grid grid-cols-3 gap-2 mb-4">
+            {[
+              { label: 'Total', val: chTotal, color: 'text-on-surface' },
+              { label: 'Due',   val: dueCount, color: 'text-tertiary-container' },
+              { label: 'Known', val: totalKnown, color: 'text-secondary' },
+            ].map(({ label, val, color }) => (
+              <div key={label} className="bg-surface-container-low rounded-xl p-2.5 text-center">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-outline mb-0.5">{label}</p>
+                <p className={`text-xl font-extrabold ${color}`}>{val}</p>
+              </div>
+            ))}
+          </div>
+          <button onClick={start}
+            className="w-full bg-primary text-on-primary font-bold py-4 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-all shadow-lg shadow-primary/20">
+            <span className="material-symbols-outlined sym-filled text-[20px]">play_arrow</span>
+            {dueCount > 0 ? `Study ${dueCount} due cards` : 'Study new cards'}
+          </button>
         </div>
-      )}
+      </div>
+
+      {/* Chapter breakdown */}
+      <div className="px-5 mt-4">
+        <p className="text-[11px] font-black uppercase tracking-[0.12em] text-on-surface-variant mb-3">All chapters</p>
+        <div className="bg-surface-container-lowest rounded-2xl overflow-hidden shadow-[0px_2px_8px_rgba(26,27,33,0.04)]">
+          {CHAPTERS.slice(1).map((ch, i) => {
+            const tot = cards.filter(c => c.chapter === ch).length
+            const kn  = cards.filter(c => c.chapter === ch && progress[c.id]?.status === 'known').length
+            const p   = tot > 0 ? Math.round(kn / tot * 100) : 0
+            const barColor = p > 70 ? 'bg-secondary' : p > 40 ? 'bg-tertiary-container' : 'bg-error'
+            return (
+              <button key={ch} onClick={() => setChapter(ch)}
+                className={`w-full text-left px-5 py-3.5 active:bg-surface-container-low transition-colors
+                  ${i < CHAPTERS.slice(1).length - 1 ? 'border-b border-surface-container' : ''}`}>
+                <div className="flex justify-between items-center mb-1.5">
+                  <span className="text-sm font-semibold text-on-surface">{ch}</span>
+                  <span className="text-xs text-on-surface-variant">{kn}/{tot}</span>
+                </div>
+                <div className="h-1.5 w-full bg-surface-container rounded-full overflow-hidden">
+                  <div className={`h-full ${barColor} rounded-full transition-all`} style={{ width: `${p}%` }} />
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      </div>
     </div>
   )
 }

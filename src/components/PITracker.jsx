@@ -80,16 +80,14 @@ const PI_DATA = {
     'Describe business ethics in entrepreneurship','Describe small-biz opportunities in intl trade',
   ],
   'Financial Analysis': [
-    'Explain forms of financial exchange','Identify types of currency',
-    'Describe functions of money','Describe sources of income and compensation',
-    'Explain time value of money','Explain purposes and importance of credit',
-    'Explain legal responsibilities for consumer financial products',
-    'Explain need to save and invest','Set financial goals',
-    'Develop personal budget','Determine personal net worth',
-    'Explain nature of tax liabilities','Maintain financial records','Balance a bank account',
-    'Manage online accounts','Calculate cost of credit','Demonstrate wise use of credit',
-    'Validate credit history','Protect against identity theft','Control debt',
-    'Prepare personal income tax forms','Discuss college financing options',
+    'Explain forms of financial exchange','Identify types of currency','Describe functions of money',
+    'Describe sources of income and compensation','Explain time value of money',
+    'Explain purposes and importance of credit','Explain legal responsibilities for consumer financial products',
+    'Explain need to save and invest','Set financial goals','Develop personal budget',
+    'Determine personal net worth','Explain nature of tax liabilities','Maintain financial records',
+    'Balance a bank account','Manage online accounts','Calculate cost of credit',
+    'Demonstrate wise use of credit','Validate credit history','Protect against identity theft',
+    'Control debt','Prepare personal income tax forms','Discuss college financing options',
     'Discuss nature of retirement planning','Explain nature of estate planning',
     'Describe types of financial-services providers','Explain types of investments',
     'Describe concept of insurance','Determine insurance needs',
@@ -103,8 +101,7 @@ const PI_DATA = {
   ],
   'Human Resources Management': [
     'Discuss nature of human resources management',
-    'Explain role of ethics in HRM','Describe use of technology in HRM',
-    'Orient new employees',
+    'Explain role of ethics in HRM','Describe use of technology in HRM','Orient new employees',
   ],
   'Information Management': [
     'Assess information needs','Obtain needed information efficiently',
@@ -147,138 +144,150 @@ const PI_DATA = {
 }
 
 export default function PITracker({ user }) {
-  const [tracker, setTracker] = useState({}) // { "PI label": { checked: bool, checkedBy: string } }
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
+  const [tracker,  setTracker]  = useState({})
+  const [loading,  setLoading]  = useState(true)
+  const [saving,   setSaving]   = useState(false)
   const [expanded, setExpanded] = useState({})
-  const [filter, setFilter] = useState('all') // all | incomplete | complete
+  const [filter,   setFilter]   = useState('all')
 
   useEffect(() => {
-    getPITracker().then(data => { setTracker(data || {}); setLoading(false) })
+    getPITracker().then(d=>{ setTracker(d||{}); setLoading(false) })
   }, [])
 
-  async function togglePI(label) {
-    const current = tracker[label]
-    const newVal = current?.checked
-      ? null // uncheck = remove
-      : { checked: true, checkedBy: user.name, checkedAt: new Date().toISOString() }
-
-    const newTracker = { ...tracker }
-    if (newVal) newTracker[label] = newVal
-    else delete newTracker[label]
-
-    setTracker(newTracker)
+  async function togglePI(pi) {
+    const cur = tracker[pi]
+    const next = cur?.checked ? null : { checked:true, checkedBy:user.name, checkedAt:new Date().toISOString() }
+    const updated = { ...tracker }
+    if (next) updated[pi] = next; else delete updated[pi]
+    setTracker(updated)
     setSaving(true)
-    try { await savePITracker(newTracker) } catch {}
+    try { await savePITracker(updated) } catch {}
     setSaving(false)
   }
 
-  function toggleChapter(ch) {
-    setExpanded(e => ({ ...e, [ch]: !e[ch] }))
-  }
-
-  const allPIs = Object.values(PI_DATA).flat()
-  const checkedCount = Object.keys(tracker).length
-  const totalCount = allPIs.length
-  const overallPct = Math.round(checkedCount / totalCount * 100)
-
-  const S = {
-    screen: { padding: '0 0 24px', background: '#f5f5f7', minHeight: '100%' },
-    header: { background: '#fff', padding: '16px 20px 20px', marginBottom: 16, borderBottom: '0.5px solid #e5e5e5' },
-    title: { fontSize: 20, fontWeight: 700 },
-    sub: { fontSize: 13, color: '#888', marginTop: 2 },
-    overallCard: { background: '#fff', borderRadius: 14, margin: '0 16px 16px', padding: 16 },
-    bigPct: { fontSize: 44, fontWeight: 800, color: overallPct >= 75 ? '#34C759' : overallPct >= 50 ? '#FF9500' : '#007AFF' },
-    chCard: { background: '#fff', borderRadius: 14, margin: '0 16px 12px', overflow: 'hidden' },
-    chHeader: { display: 'flex', alignItems: 'center', padding: '14px 16px', cursor: 'pointer', gap: 10 },
-    piRow: { display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px', borderTop: '0.5px solid #f5f5f7' },
-    check: (checked) => ({
-      width: 22, height: 22, borderRadius: '50%', border: checked ? 'none' : '1.5px solid #ccc',
-      background: checked ? '#34C759' : 'transparent', flexShrink: 0,
-      display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: '#fff', cursor: 'pointer'
-    }),
-    piLabel: (checked) => ({ fontSize: 13, color: checked ? '#888' : '#1d1d1f', textDecoration: checked ? 'line-through' : 'none', flex: 1, lineHeight: 1.4 }),
-    checkedBy: { fontSize: 11, color: '#aaa', flexShrink: 0 },
-  }
+  const allPIs    = Object.values(PI_DATA).flat()
+  const checked   = Object.keys(tracker).length
+  const total     = allPIs.length
+  const overall   = Math.round(checked / total * 100)
 
   if (loading) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100dvh' }}>
-      <div style={{ fontSize: 15, color: '#888' }}>Loading team progress…</div>
+    <div className="min-h-screen flex items-center justify-center">
+      <p className="text-on-surface-variant text-sm">Loading team progress…</p>
     </div>
   )
 
   return (
-    <div style={S.screen}>
-      <div style={S.header}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+    <div className="bg-surface min-h-full pb-4">
+      {/* Header */}
+      <div className="bg-background px-5 pt-12 pb-5 sticky top-0 z-10 shadow-sm">
+        <div className="flex justify-between items-center mb-4">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined sym-filled text-primary text-[22px]">leaderboard</span>
+            <h1 className="text-primary font-black tracking-tighter text-xl">PI Tracker</h1>
+          </div>
+          <span className="text-on-surface-variant text-sm font-medium">
+            {saving ? 'Saving…' : 'Team View'}
+          </span>
+        </div>
+
+        {/* Overall coverage */}
+        <div className="flex justify-between items-end mb-2">
           <div>
-            <div style={S.title}>PI Tracker</div>
-            <div style={S.sub}>Shared across your team {saving ? '· Saving…' : '· Synced'}</div>
+            <p className="text-on-surface-variant text-[11px] font-bold uppercase tracking-widest">Overall Coverage</p>
+            <h2 className="text-5xl font-black text-primary tracking-tighter">{overall}%</h2>
           </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 24, fontWeight: 800, color: overallPct >= 75 ? '#34C759' : overallPct >= 50 ? '#FF9500' : '#007AFF' }}>{overallPct}%</div>
-            <div style={{ fontSize: 11, color: '#888' }}>{checkedCount}/{totalCount}</div>
+          <div className="flex items-center gap-1.5 px-3 py-1 bg-secondary-container/30 rounded-full mb-1">
+            <span className="w-2 h-2 rounded-full bg-secondary" />
+            <span className="text-[11px] font-bold text-on-secondary-container uppercase tracking-wider">Synced</span>
           </div>
         </div>
-        {/* Overall progress bar */}
-        <div style={{ height: 6, background: '#e5e5e5', borderRadius: 4, marginTop: 12, overflow: 'hidden' }}>
-          <div style={{ height: '100%', width: `${overallPct}%`, background: overallPct >= 75 ? '#34C759' : overallPct >= 50 ? '#FF9500' : '#007AFF', borderRadius: 4, transition: 'width 0.3s' }} />
+        <div className="h-3 w-full bg-surface-container rounded-full overflow-hidden">
+          <div className="h-full bg-primary rounded-full transition-all duration-500" style={{width:`${overall}%`}} />
         </div>
       </div>
 
-      {/* Filter */}
-      <div style={{ display: 'flex', gap: 8, padding: '0 16px 12px' }}>
-        {[['all','All'],['incomplete','Remaining'],['complete','Done']].map(([val, label]) => (
-          <button key={val} onClick={() => setFilter(val)} style={{
-            padding: '6px 14px', borderRadius: 20, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: filter === val ? 600 : 400,
-            background: filter === val ? '#007AFF' : '#fff', color: filter === val ? '#fff' : '#555'
-          }}>{label}</button>
-        ))}
-      </div>
+      <div className="px-5 mt-4 space-y-4">
+        {/* Filter pills */}
+        <div className="flex gap-2">
+          {[['all','All'],['incomplete','Remaining'],['complete','Done']].map(([v,l])=>(
+            <button key={v} onClick={()=>setFilter(v)}
+              className={`px-5 py-2 rounded-xl text-sm font-semibold transition-all active:scale-95
+                ${filter===v?'bg-primary text-on-primary shadow-md':'bg-surface-container-lowest border border-outline-variant/20 text-on-surface-variant'}`}>
+              {l}
+            </button>
+          ))}
+        </div>
 
-      {Object.entries(PI_DATA).map(([chapter, pis]) => {
-        const chChecked = pis.filter(pi => tracker[pi]?.checked).length
-        const chPct = Math.round(chChecked / pis.length * 100)
-        const isExpanded = expanded[chapter]
+        {/* Summary cards */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="bg-surface-container-lowest rounded-xl p-4 shadow-[0px_2px_8px_rgba(26,27,33,0.04)]">
+            <p className="text-[10px] font-bold text-outline uppercase tracking-widest mb-1">PIs covered</p>
+            <p className="text-xl font-bold text-on-surface">{overall}%</p>
+          </div>
+          <div className="bg-surface-container-lowest rounded-xl p-4 shadow-[0px_2px_8px_rgba(26,27,33,0.04)]">
+            <p className="text-[10px] font-bold text-outline uppercase tracking-widest mb-1">Remaining</p>
+            <p className="text-xl font-bold text-on-surface">{total - checked} PIs</p>
+          </div>
+        </div>
 
-        const filtered = pis.filter(pi => {
-          if (filter === 'complete') return tracker[pi]?.checked
-          if (filter === 'incomplete') return !tracker[pi]?.checked
-          return true
-        })
-        if (filter !== 'all' && filtered.length === 0) return null
+        {/* Chapter list */}
+        <div className="bg-surface-container-lowest rounded-2xl overflow-hidden shadow-[0px_2px_8px_rgba(26,27,33,0.04)]">
+          <div className="px-5 py-4 border-b border-surface-container flex justify-between items-center">
+            <h3 className="font-bold text-primary tracking-tight">Performance Indicators</h3>
+            <span className="material-symbols-outlined text-outline text-[20px]">filter_list</span>
+          </div>
 
-        return (
-          <div key={chapter} style={S.chCard}>
-            <div style={S.chHeader} onClick={() => toggleChapter(chapter)}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, fontWeight: 600 }}>{chapter}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5 }}>
-                  <div style={{ flex: 1, height: 4, background: '#e5e5e5', borderRadius: 3, overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${chPct}%`, background: chPct >= 75 ? '#34C759' : chPct >= 50 ? '#FF9500' : '#FF3B30', borderRadius: 3 }} />
+          {Object.entries(PI_DATA).map(([chapter, pis], chIdx) => {
+            const chChecked = pis.filter(pi => tracker[pi]?.checked).length
+            const chPct     = Math.round(chChecked / pis.length * 100)
+            const isOpen    = expanded[chapter]
+            const barColor  = chPct>=75?'bg-primary':chPct>=40?'bg-primary/60':'bg-primary/30'
+
+            const filtered = pis.filter(pi => {
+              if (filter==='complete')   return tracker[pi]?.checked
+              if (filter==='incomplete') return !tracker[pi]?.checked
+              return true
+            })
+            if (filter !== 'all' && filtered.length === 0) return null
+
+            return (
+              <div key={chapter} className={chIdx < Object.keys(PI_DATA).length-1 ? 'border-b border-surface-container' : ''}>
+                <button onClick={()=>setExpanded(e=>({...e,[chapter]:!e[chapter]}))}
+                  className="w-full px-5 py-4 flex items-center gap-3 hover:bg-surface-container-low transition-colors active:bg-surface-container-low">
+                  <div className="flex-1 text-left">
+                    <p className="font-bold text-on-surface text-sm mb-2">{chapter}</p>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-1.5 bg-surface-container rounded-full overflow-hidden">
+                        <div className={`h-full ${barColor} rounded-full`} style={{width:`${chPct}%`}} />
+                      </div>
+                      <span className="text-[11px] font-bold text-primary flex-shrink-0">{chChecked}/{pis.length}</span>
+                    </div>
                   </div>
-                  <span style={{ fontSize: 11, color: '#888', flexShrink: 0 }}>{chChecked}/{pis.length}</span>
-                </div>
+                  <span className={`material-symbols-outlined text-outline-variant text-[20px] transition-transform ${isOpen?'rotate-90':''}`}>
+                    chevron_right
+                  </span>
+                </button>
+
+                {isOpen && filtered.map(pi => {
+                  const done = tracker[pi]?.checked
+                  const by   = tracker[pi]?.checkedBy
+                  return (
+                    <div key={pi} className="flex items-center gap-3 px-5 py-3 border-t border-surface-container bg-surface-container-low/50">
+                      <button onClick={()=>togglePI(pi)}
+                        className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 transition-all active:scale-90
+                          ${done?'bg-secondary text-on-secondary':'border-2 border-outline-variant/40'}`}>
+                        {done && <span className="material-symbols-outlined sym-filled text-[14px]">check</span>}
+                      </button>
+                      <p className={`text-sm flex-1 leading-snug ${done?'text-on-surface-variant line-through':'text-on-surface'}`}>{pi}</p>
+                      {done && by && <span className="text-[11px] text-outline flex-shrink-0">{by.split(' ')[0]}</span>}
+                    </div>
+                  )
+                })}
               </div>
-              <div style={{ fontSize: 16, color: '#c0c0c0', transform: isExpanded ? 'rotate(90deg)' : 'rotate(0)', transition: 'transform 0.2s' }}>›</div>
-            </div>
-
-            {isExpanded && filtered.map(pi => {
-              const checked = tracker[pi]?.checked
-              const by = tracker[pi]?.checkedBy
-              return (
-                <div key={pi} style={S.piRow}>
-                  <div style={S.check(checked)} onClick={() => togglePI(pi)}>
-                    {checked && '✓'}
-                  </div>
-                  <div style={S.piLabel(checked)}>{pi}</div>
-                  {checked && by && <div style={S.checkedBy}>{by.split(' ')[0]}</div>}
-                </div>
-              )
-            })}
-          </div>
-        )
-      })}
+            )
+          })}
+        </div>
+      </div>
     </div>
   )
 }

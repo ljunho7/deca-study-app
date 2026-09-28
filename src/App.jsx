@@ -4,13 +4,15 @@ import Home from './components/Home.jsx'
 import Flashcards from './components/Flashcards.jsx'
 import Exam from './components/Exam.jsx'
 import PITracker from './components/PITracker.jsx'
+import Profile from './components/Profile.jsx'
 
-const TAB_ICONS = {
-  home:  { label: 'Home',  icon: '⊞' },
-  cards: { label: 'Cards', icon: '◈' },
-  exam:  { label: 'Exam',  icon: '✎' },
-  pi:    { label: 'PIs',   icon: '☑' },
-}
+const TABS = [
+  { key: 'home',    label: 'Home',    icon: 'home' },
+  { key: 'cards',   label: 'Cards',   icon: 'style' },
+  { key: 'exam',    label: 'Exam',    icon: 'edit_note' },
+  { key: 'pi',      label: 'PIs',     icon: 'fact_check' },
+  { key: 'profile', label: 'Profile', icon: 'person' },
+]
 
 export default function App() {
   const [user, setUser] = useState(() => {
@@ -20,48 +22,43 @@ export default function App() {
   const [flashcardsData, setFlashcardsData] = useState(null)
   const [questionsData, setQuestionsData] = useState(null)
 
-  // Preload data files
   useEffect(() => {
-    fetch('/flashcards.json').then(r => r.json()).then(setFlashcardsData)
-    fetch('/questions.json').then(r => r.json()).then(setQuestionsData)
+    fetch('/flashcards.json').then(r => r.json()).then(setFlashcardsData).catch(() => {})
+    fetch('/questions.json').then(r => r.json()).then(setQuestionsData).catch(() => {})
   }, [])
 
-  if (!user) {
-    return <Login onLogin={u => {
-      localStorage.setItem('deca_user', JSON.stringify(u))
-      setUser(u)
-    }} />
-  }
+  if (!user) return (
+    <Login onLogin={u => { localStorage.setItem('deca_user', JSON.stringify(u)); setUser(u) }} />
+  )
 
   const screens = {
-    home:  <Home user={user} onTabChange={setTab} onLogout={() => { localStorage.removeItem('deca_user'); setUser(null) }} />,
-    cards: <Flashcards user={user} data={flashcardsData} />,
-    exam:  <Exam user={user} data={questionsData} />,
-    pi:    <PITracker user={user} />,
+    home:    <Home user={user} onTabChange={setTab} />,
+    cards:   <Flashcards user={user} data={flashcardsData} />,
+    exam:    <Exam user={user} data={questionsData} />,
+    pi:      <PITracker user={user} />,
+    profile: <Profile user={user} onLogout={() => { localStorage.removeItem('deca_user'); setUser(null) }} />,
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh' }}>
-      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+    <div className="flex flex-col" style={{ height: '100dvh' }}>
+      <div className="flex-1 overflow-y-auto overflow-x-hidden">
         {screens[tab]}
       </div>
-      <nav style={{
-        display: 'flex', borderTop: '0.5px solid #e0e0e0',
-        background: '#fff', paddingBottom: 'env(safe-area-inset-bottom)',
-        flexShrink: 0
-      }}>
-        {Object.entries(TAB_ICONS).map(([key, { label, icon }]) => (
-          <button key={key} onClick={() => setTab(key)} style={{
-            flex: 1, border: 'none', background: 'none', padding: '8px 4px 6px',
-            cursor: 'pointer', display: 'flex', flexDirection: 'column',
-            alignItems: 'center', gap: 2
-          }}>
-            <span style={{ fontSize: 20, color: tab === key ? '#007AFF' : '#8e8e93' }}>{icon}</span>
-            <span style={{ fontSize: 10, color: tab === key ? '#007AFF' : '#8e8e93', fontWeight: tab === key ? 600 : 400 }}>
-              {label}
-            </span>
-          </button>
-        ))}
+
+      {/* Bottom Nav */}
+      <nav className="flex justify-around items-center px-2 pt-2 pb-safe bg-white/70 backdrop-blur-xl border-t border-outline-variant/20 shadow-[0px_-4px_20px_rgba(26,27,33,0.05)] rounded-t-2xl z-50 flex-shrink-0"
+           style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 8px)' }}>
+        {TABS.map(({ key, label, icon }) => {
+          const active = tab === key
+          return (
+            <button key={key} onClick={() => setTab(key)}
+              className={`flex flex-col items-center justify-center gap-0.5 px-3 py-1.5 rounded-xl transition-all duration-150 active:scale-90 min-w-0
+                ${active ? 'bg-primary/10 text-primary' : 'text-on-surface-variant opacity-70'}`}>
+              <span className={`material-symbols-outlined text-[22px] ${active ? 'sym-filled' : ''}`}>{icon}</span>
+              <span className="text-[10px] font-semibold uppercase tracking-wider leading-none">{label}</span>
+            </button>
+          )
+        })}
       </nav>
     </div>
   )
